@@ -23,7 +23,7 @@ func main() {
 	store := db.New(conn)
 
 	// Initialize and start cron scheduler
-	scheduler, err := cron.NewScheduler()
+	scheduler, err := cron.NewScheduler(store)
 	if err != nil {
 		log.Fatal("cannot create scheduler:", err)
 	}
@@ -36,7 +36,7 @@ func main() {
 	scheduler.Start()
 	defer scheduler.Stop()
 
-	server := api.NewServer(store)
+	server := api.NewServer(store, config.GINMode)
 
 	err = server.Start(config.ServerAddress)
 	if err != nil {

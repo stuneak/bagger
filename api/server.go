@@ -10,9 +10,11 @@ type Server struct {
 	router *gin.Engine
 }
 
-func NewServer(store *db.Queries) *Server {
+func NewServer(store *db.Queries, ginMode string) *Server {
 	server := &Server{store: store}
 	router := gin.Default()
+
+	gin.SetMode(ginMode)
 
 	// Routes
 	router.GET("/users/:id", server.getUser)
