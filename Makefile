@@ -7,7 +7,6 @@ migrateup:
 migratedown:
 	migrate -path db/sqlc/migration -database "$(DB_SOURCE)" -verbose down
 
-
 new_migration:
 	migrate create -ext sql -dir db/sqlc/migration -seq $(name)
 
@@ -20,11 +19,16 @@ server:
 test:
 	go test -v -cover ./...
 
-local:
+uplocal:
 	docker-compose -f ./docker-compose.local.yml up -d 
 
-prod:
+upprod:
 	docker-compose up -d 
 
+dlocal:
+	docker-compose -f ./docker-compose.local.yml down 
 
-.PHONY: migrateup migratedown new_migration sqlc server test
+dprod:
+	docker-compose down
+
+.PHONY: migrateup migratedown new_migration sqlc server test local prod
