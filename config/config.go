@@ -1,0 +1,37 @@
+package config
+
+import (
+	"log"
+	"os"
+
+	"github.com/joho/godotenv"
+)
+
+type Config struct {
+	DBDriver      string
+	DBSource      string
+	ServerAddress string
+}
+
+func LoadConfig() (config Config, err error) {
+	err = godotenv.Load()
+	if err != nil {
+		log.Println("Warning: Error loading .env file, using environment variables")
+	}
+
+	config = Config{
+		DBDriver:      getEnv("DB_DRIVER", "postgres"),
+		DBSource:      getEnv("DB_SOURCE", ""),
+		ServerAddress: getEnv("SERVER_ADDRESS", "0.0.0.0:8080"),
+	}
+
+	return config, nil
+}
+
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}

@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bagger-postgres
+    env_file:
+      - .env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bagger-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bagger-app
+    environment:
+      DB_DRIVER: ${DB_DRIVER:-postgres}
+      DB_SOURCE: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      SERVER_ADDRESS: ${SERVER_ADDRESS:-0.0.0.0:8080}
+      GIN_MODE: ${GIN_MODE:-release}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks:
+      - bagger-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  bagger-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
