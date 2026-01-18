@@ -31,7 +31,22 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    
+
+  # SSL certificate initialization - runs once on first deploy
+  ssl-init:
+    image: certbot/certbot:latest
+    container_name: bagger-ssl-init
+    ports:
+      - "80:80"
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - ./scripts/ssl-init.sh:/ssl-init.sh:ro
+    entrypoint: /bin/sh
+    command: /ssl-init.sh
+    networks:
+      - bagger-network
+
   nginx:
     image: nginx:alpine
     container_name: bagger-nginx
@@ -40,6 +55,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
     networks:
       - bagger-network
     depends_on:
@@ -49,6 +66,21 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # Certbot renewal service - checks for renewal every 12 hours and reloads nginx
+  certbot:
+    image: certbot/certbot:latest
+    container_name: bagger-certbot
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: /bin/sh -c "apk add --no-cache curl > /dev/null 2>&1; trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet --deploy-hook 'curl -s --unix-socket /var/run/docker.sock -X POST http://localhost/containers/bagger-nginx/kill?signal=HUP'; sleep 12h & wait $${!}; done"
+    networks:
+      - bagger-network
+    depends_on:
+      nginx:
+        condition: service_started
+    restart: unless-stopped
 
 networks:
   bagger-network:
@@ -56,3 +88,5 @@ networks:
 
 volumes:
   postgres_data:
+  certbot_conf:
+  certbot_www:
