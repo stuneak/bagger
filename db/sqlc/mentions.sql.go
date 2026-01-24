@@ -82,7 +82,7 @@ picks_with_splits AS (
     pp.mentioned_at,
     pp.current_price,
     pp.current_price_date,
-    COALESCE(ROUND(exp(sum(ln(NULLIF(ss.ratio::double precision, 0))))::numeric, 4), 1.0)::double precision AS split_ratio
+    COALESCE(ROUND(exp(sum(ln(ss.ratio::double precision)))::numeric, 4), 1.0)::double precision AS split_ratio
   FROM picks_with_prices pp
   LEFT JOIN stock_splits ss ON ss.ticker_id = pp.ticker_id
     AND ss.effective_date >= pp.mentioned_at::date
@@ -163,46 +163,68 @@ WITH first_mentions AS (
   JOIN ticker_prices tp ON tm.price_id = tp.id
   WHERE u.username = $1
   ORDER BY tm.ticker_id, tm.mentioned_at ASC
+),
+picks_with_prices AS (
+  SELECT
+    fm.symbol,
+    fm.ticker_id,
+    fm.mention_price,
+    fm.mentioned_at,
+    lp.price AS current_price,
+    lp.recorded_at AS current_price_date
+  FROM first_mentions fm
+  CROSS JOIN LATERAL (
+    SELECT price, recorded_at
+    FROM ticker_prices
+    WHERE ticker_id = fm.ticker_id
+    ORDER BY recorded_at DESC
+    LIMIT 1
+  ) lp
+),
+picks_with_splits AS (
+  SELECT
+    pp.symbol,
+    pp.ticker_id,
+    pp.mention_price,
+    pp.mentioned_at,
+    pp.current_price,
+    pp.current_price_date,
+    COALESCE(ROUND(exp(sum(ln(ss.ratio::double precision)))::numeric, 4), 1.0)::double precision AS split_ratio
+  FROM picks_with_prices pp
+  LEFT JOIN stock_splits ss ON ss.ticker_id = pp.ticker_id
+    AND ss.effective_date >= pp.mentioned_at::date
+    AND ss.effective_date <= pp.current_price_date::date
+  GROUP BY pp.symbol, pp.ticker_id, pp.mention_price, pp.mentioned_at, pp.current_price, pp.current_price_date
 )
 SELECT
-  fm.symbol,
-  fm.ticker_id,
-  fm.mention_price,
-  fm.mentioned_at,
-  lp.price AS current_price,
-  lp.recorded_at AS current_price_date,
-  COALESCE(ROUND(exp(sum(ln(NULLIF(ss.ratio::double precision, 0))))::numeric, 4), 1.0)::double precision AS split_ratio
-FROM first_mentions fm
-CROSS JOIN LATERAL (
-  SELECT price, recorded_at
-  FROM ticker_prices
-  WHERE ticker_id = fm.ticker_id
-  ORDER BY recorded_at DESC
-  LIMIT 1
-) lp
-LEFT JOIN stock_splits ss ON ss.ticker_id = fm.ticker_id
-  AND ss.effective_date > fm.mentioned_at::date
-  AND ss.effective_date <= $2
-GROUP BY fm.symbol, fm.ticker_id, fm.mention_price, fm.mentioned_at, lp.price, lp.recorded_at
+  symbol,
+  ticker_id,
+  mention_price,
+  mentioned_at,
+  current_price,
+  current_price_date,
+  (CASE
+    WHEN mention_price * split_ratio BETWEEN current_price * 0.8 AND current_price * 1.2
+    THEN split_ratio
+    WHEN mention_price BETWEEN current_price * 0.8 AND current_price * 1.2
+    THEN 1.0
+    ELSE split_ratio
+  END)::double precision AS calculated_split_ratio
+FROM picks_with_splits
 `
 
-type GetFirstMentionPerTickerByUsernameParams struct {
-	Username      string    `json:"username"`
-	EffectiveDate time.Time `json:"effective_date"`
-}
-
 type GetFirstMentionPerTickerByUsernameRow struct {
-	Symbol           string    `json:"symbol"`
-	TickerID         int64     `json:"ticker_id"`
-	MentionPrice     string    `json:"mention_price"`
-	MentionedAt      time.Time `json:"mentioned_at"`
-	CurrentPrice     string    `json:"current_price"`
-	CurrentPriceDate time.Time `json:"current_price_date"`
-	SplitRatio       float64   `json:"split_ratio"`
+	Symbol               string    `json:"symbol"`
+	TickerID             int64     `json:"ticker_id"`
+	MentionPrice         string    `json:"mention_price"`
+	MentionedAt          time.Time `json:"mentioned_at"`
+	CurrentPrice         string    `json:"current_price"`
+	CurrentPriceDate     time.Time `json:"current_price_date"`
+	CalculatedSplitRatio float64   `json:"calculated_split_ratio"`
 }
 
-func (q *Queries) GetFirstMentionPerTickerByUsername(ctx context.Context, arg GetFirstMentionPerTickerByUsernameParams) ([]GetFirstMentionPerTickerByUsernameRow, error) {
-	rows, err := q.db.QueryContext(ctx, getFirstMentionPerTickerByUsername, arg.Username, arg.EffectiveDate)
+func (q *Queries) GetFirstMentionPerTickerByUsername(ctx context.Context, username string) ([]GetFirstMentionPerTickerByUsernameRow, error) {
+	rows, err := q.db.QueryContext(ctx, getFirstMentionPerTickerByUsername, username)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +239,7 @@ func (q *Queries) GetFirstMentionPerTickerByUsername(ctx context.Context, arg Ge
 			&i.MentionedAt,
 			&i.CurrentPrice,
 			&i.CurrentPriceDate,
-			&i.SplitRatio,
+			&i.CalculatedSplitRatio,
 		); err != nil {
 			return nil, err
 		}

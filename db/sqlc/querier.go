@@ -19,7 +19,7 @@ type Querier interface {
 	GetAllSplits(ctx context.Context) ([]GetAllSplitsRow, error)
 	GetAllVisitors(ctx context.Context, limit int32) ([]Visitor, error)
 	GetCommentByUserAndExternalID(ctx context.Context, arg GetCommentByUserAndExternalIDParams) (Comment, error)
-	GetFirstMentionPerTickerByUsername(ctx context.Context, arg GetFirstMentionPerTickerByUsernameParams) ([]GetFirstMentionPerTickerByUsernameRow, error)
+	GetFirstMentionPerTickerByUsername(ctx context.Context, username string) ([]GetFirstMentionPerTickerByUsernameRow, error)
 	GetHighestPriceAfterDate(ctx context.Context, arg GetHighestPriceAfterDateParams) (GetHighestPriceAfterDateRow, error)
 	GetLatestTickerPrice(ctx context.Context, tickerID int64) (GetLatestTickerPriceRow, error)
 	GetSplitsBetweenDates(ctx context.Context, arg GetSplitsBetweenDatesParams) ([]GetSplitsBetweenDatesRow, error)

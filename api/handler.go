@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	db "github.com/stuneak/sopeko/db/sqlc"
+	_ "github.com/stuneak/sopeko/db/sqlc"
 )
 
 // Excluded usernames (mods, bots, special accounts)
@@ -49,10 +49,7 @@ type MentionResponse struct {
 func (server *Server) getUserMentions(ctx *gin.Context) {
 	username := ctx.Param("username")
 
-	mentions, err := server.store.GetFirstMentionPerTickerByUsername(ctx, db.GetFirstMentionPerTickerByUsernameParams{
-		Username:      username,
-		EffectiveDate: time.Now(),
-	})
+	mentions, err := server.store.GetFirstMentionPerTickerByUsername(ctx, username)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -67,10 +64,10 @@ func (server *Server) getUserMentions(ctx *gin.Context) {
 
 	for _, mention := range mentions {
 		adjustedMentionPrice := mention.MentionPrice
-		if mention.SplitRatio != 1.0 {
+		if mention.CalculatedSplitRatio != 1.0 {
 			mp, err := strconv.ParseFloat(mention.MentionPrice, 64)
 			if err == nil {
-				adjustedMentionPrice = fmt.Sprintf("%.2f", mp*mention.SplitRatio)
+				adjustedMentionPrice = fmt.Sprintf("%.2f", mp*mention.CalculatedSplitRatio)
 			}
 		}
 
@@ -81,7 +78,7 @@ func (server *Server) getUserMentions(ctx *gin.Context) {
 			CurrentPrice:     mention.CurrentPrice,
 			CurrentPriceDate: mention.CurrentPriceDate,
 			PercentChange:    percentChange,
-			SplitRatio:       mention.SplitRatio,
+			SplitRatio:       mention.CalculatedSplitRatio,
 			MentionedAt:      mention.MentionedAt,
 		})
 	}
@@ -171,12 +168,12 @@ func (server *Server) getPerformingPicks(ctx *gin.Context, topPerformers bool) {
 
 	// Track first mention per ticker (unique across all users)
 	firstMentionPerTicker := make(map[int64]struct {
-		symbol              string
-		mentionPrice        string
-		currentPrice        string
-		currentPriceDate    time.Time
+		symbol               string
+		mentionPrice         string
+		currentPrice         string
+		currentPriceDate     time.Time
 		calculatedSplitRatio float64
-		mentionedAt         time.Time
+		mentionedAt          time.Time
 	})
 
 	for _, pick := range picks {
@@ -185,19 +182,19 @@ func (server *Server) getPerformingPicks(ctx *gin.Context, topPerformers bool) {
 		}
 		if existing, ok := firstMentionPerTicker[pick.TickerID]; !ok || pick.MentionedAt.Before(existing.mentionedAt) {
 			firstMentionPerTicker[pick.TickerID] = struct {
-				symbol              string
-				mentionPrice        string
-				currentPrice        string
-				currentPriceDate    time.Time
+				symbol               string
+				mentionPrice         string
+				currentPrice         string
+				currentPriceDate     time.Time
 				calculatedSplitRatio float64
-				mentionedAt         time.Time
+				mentionedAt          time.Time
 			}{
-				symbol:              pick.Symbol,
-				mentionPrice:        pick.MentionPrice,
-				currentPrice:        pick.CurrentPrice,
-				currentPriceDate:    pick.CurrentPriceDate,
+				symbol:               pick.Symbol,
+				mentionPrice:         pick.MentionPrice,
+				currentPrice:         pick.CurrentPrice,
+				currentPriceDate:     pick.CurrentPriceDate,
 				calculatedSplitRatio: pick.CalculatedSplitRatio,
-				mentionedAt:         pick.MentionedAt,
+				mentionedAt:          pick.MentionedAt,
 			}
 		}
 	}
