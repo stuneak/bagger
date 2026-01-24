@@ -16,7 +16,6 @@ import (
 )
 
 var plog = log.New(log.Writer(), "[PARSER] ", log.Flags())
-
 var tickersToSkip = map[string]bool{
 	"YMMV": true, "EPS": true, "TAKE": true, "MAY": true, "YOUVE": true,
 	"ONLY": true, "LOST": true, "MONEY": true, "IF": true, "YOU": true,
@@ -69,6 +68,9 @@ var tickersToSkip = map[string]bool{
 	"TOP": true, "BACK": true, "HOOD": true, "PD": true, "PM": true,
 	"EST": true, "ICE": true, "MAGA": true, "TS": true, "SCI": true,
 	"DTE": true, "CC": true, "NOW": true, "GO": true, "EOD": true,
+	"TACO": true, "EU": true, "IRS": true, "GOOD": true, "BAD": true,
+	"LINK": true, "DNA": true, "CPU": true, "GPU": true, "RAM": true,
+	"SSD": true, "HDD": true, "CTO": true, "ASX": true, "ARR": true, "SO": true,
 }
 
 // tickerRegex matches uppercase words (2-7 chars) that could be tickers
@@ -262,24 +264,23 @@ func (p *TickerParser) processTicker(ctx context.Context, ticker db.Ticker, user
 		plog.Printf("Using existing price for %s on %v: %s", ticker.Symbol, mentionedAt.Format("2006-01-02"), price)
 	} else if err == sql.ErrNoRows {
 		// No price exists, fetch from Yahoo
-		fetchedPrice, priceTime, fetchErr := p.fetchHistoricalPrice(ctx, ticker.Symbol, mentionedAt)
+		fetchedPrice, fetchedVolume, priceTime, fetchErr := p.fetchHistoricalPrice(ctx, ticker.Symbol, mentionedAt)
 		if fetchErr != nil {
 			plog.Printf("Error fetching price for %s at %v: %v", ticker.Symbol, mentionedAt, fetchErr)
-			fetchedPrice = "0"
-			priceTime = mentionedAt
-		}
-
-		// Insert price into ticker_prices
-		insertedPrice, insertErr := p.store.InsertTickerPrice(ctx, db.InsertTickerPriceParams{
-			TickerID:   ticker.ID,
-			Price:      fetchedPrice,
-			RecordedAt: priceTime,
-		})
-		if insertErr != nil {
-			plog.Printf("Error inserting ticker price: %v", insertErr)
 		} else {
-			price = insertedPrice.Price
-			priceID = insertedPrice.ID
+			// Only insert price if fetch succeeded
+			insertedPrice, insertErr := p.store.InsertTickerPrice(ctx, db.InsertTickerPriceParams{
+				TickerID:   ticker.ID,
+				Price:      fetchedPrice,
+				Volume:     fetchedVolume,
+				RecordedAt: priceTime,
+			})
+			if insertErr != nil {
+				plog.Printf("Error inserting ticker price: %v", insertErr)
+			} else {
+				price = insertedPrice.Price
+				priceID = insertedPrice.ID
+			}
 		}
 	} else {
 		plog.Printf("Error checking existing price for %s: %v", ticker.Symbol, err)
@@ -305,10 +306,14 @@ func (p *TickerParser) processTicker(ctx context.Context, ticker db.Ticker, user
 type yahooChartResponse struct {
 	Chart struct {
 		Result []struct {
-			Timestamp  []int64 `json:"timestamp"`
+			Timestamp []int64 `json:"timestamp"`
+			Events    *struct {
+				Splits map[string]yahooSplitEvent `json:"splits"`
+			} `json:"events"`
 			Indicators struct {
 				Quote []struct {
-					Close []float64 `json:"close"`
+					Close  []float64 `json:"close"`
+					Volume []int64   `json:"volume"`
 				} `json:"quote"`
 			} `json:"indicators"`
 		} `json:"result"`
@@ -319,8 +324,15 @@ type yahooChartResponse struct {
 	} `json:"chart"`
 }
 
-// fetchHistoricalPrice fetches the price at or before the given time
-func (p *TickerParser) fetchHistoricalPrice(ctx context.Context, symbol string, targetTime time.Time) (string, time.Time, error) {
+type yahooSplitEvent struct {
+	Date        int64   `json:"date"`
+	Numerator   float64 `json:"numerator"`
+	Denominator float64 `json:"denominator"`
+	SplitRatio  string  `json:"splitRatio"`
+}
+
+// fetchHistoricalPrice fetches the price and volume at or before the given time
+func (p *TickerParser) fetchHistoricalPrice(ctx context.Context, symbol string, targetTime time.Time) (string, int64, time.Time, error) {
 	// Calculate time range: from 7 days before to target time
 	startTime := targetTime.Add(-7 * 24 * time.Hour).Unix()
 	endTime := targetTime.Unix()
@@ -332,65 +344,69 @@ func (p *TickerParser) fetchHistoricalPrice(ctx context.Context, symbol string, 
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", 0, time.Time{}, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; StockMentionBot/1.0)")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", 0, time.Time{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("yahoo finance returned status %d", resp.StatusCode)
+		return "", 0, time.Time{}, fmt.Errorf("yahoo finance returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", 0, time.Time{}, err
 	}
 
 	var chartResp yahooChartResponse
 	if err := json.Unmarshal(body, &chartResp); err != nil {
-		return "", time.Time{}, err
+		return "", 0, time.Time{}, err
 	}
 
 	if chartResp.Chart.Error != nil {
-		return "", time.Time{}, fmt.Errorf("yahoo API error: %s", chartResp.Chart.Error.Description)
+		return "", 0, time.Time{}, fmt.Errorf("yahoo API error: %s", chartResp.Chart.Error.Description)
 	}
 
 	if len(chartResp.Chart.Result) == 0 {
-		return "", time.Time{}, fmt.Errorf("no data returned for %s", symbol)
+		return "", 0, time.Time{}, fmt.Errorf("no data returned for %s", symbol)
 	}
 
 	result := chartResp.Chart.Result[0]
 	if len(result.Timestamp) == 0 || len(result.Indicators.Quote) == 0 || len(result.Indicators.Quote[0].Close) == 0 {
-		return "", time.Time{}, fmt.Errorf("no price data for %s", symbol)
+		return "", 0, time.Time{}, fmt.Errorf("no price data for %s", symbol)
 	}
 
 	// Find the closest price at or before target time
+	quote := result.Indicators.Quote[0]
 	timestamps := result.Timestamp
-	closes := result.Indicators.Quote[0].Close
 
 	targetUnix := targetTime.Unix()
 
 	// Find latest valid price at or before target time
-	bestIdx := findLatestPriceBeforeTarget(timestamps, closes, targetUnix)
+	bestIdx := findLatestPriceBeforeTarget(timestamps, quote.Close, targetUnix)
 
 	// Fallback to earliest available price
 	if bestIdx == -1 {
-		bestIdx = findFirstValidPrice(closes)
+		bestIdx = findFirstValidPrice(quote.Close)
 	}
 
 	if bestIdx == -1 {
-		return "", time.Time{}, fmt.Errorf("no valid price found for %s", symbol)
+		return "", 0, time.Time{}, fmt.Errorf("no valid price found for %s", symbol)
 	}
 
 	priceTime := time.Unix(timestamps[bestIdx], 0)
-	price := fmt.Sprintf("%.6f", closes[bestIdx])
+	price := fmt.Sprintf("%.6f", quote.Close[bestIdx])
+	var vol int64
+	if bestIdx < len(quote.Volume) {
+		vol = quote.Volume[bestIdx]
+	}
 
-	return price, priceTime, nil
+	return price, vol, priceTime, nil
 }
 
 // findLatestPriceBeforeTarget returns the index of the latest price at or before targetUnix.
@@ -416,8 +432,8 @@ func findFirstValidPrice(closes []float64) int {
 	return -1
 }
 
-// FetchCurrentPrice fetches the current/latest price for a symbol from Yahoo Finance
-func (p *TickerParser) FetchCurrentPrice(ctx context.Context, symbol string) (string, error) {
+// FetchCurrentPrice fetches the current/latest price and volume for a symbol from Yahoo Finance
+func (p *TickerParser) FetchCurrentPrice(ctx context.Context, symbol string) (string, int64, error) {
 	// Use 1d interval with range of 1d to get latest price
 	url := fmt.Sprintf(
 		"https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=1d",
@@ -426,50 +442,131 @@ func (p *TickerParser) FetchCurrentPrice(ctx context.Context, symbol string) (st
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; StockMentionBot/1.0)")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("yahoo finance returned status %d", resp.StatusCode)
+		return "", 0, fmt.Errorf("yahoo finance returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	var chartResp yahooChartResponse
 	if err := json.Unmarshal(body, &chartResp); err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	if chartResp.Chart.Error != nil {
-		return "", fmt.Errorf("yahoo API error: %s", chartResp.Chart.Error.Description)
+		return "", 0, fmt.Errorf("yahoo API error: %s", chartResp.Chart.Error.Description)
 	}
 
 	if len(chartResp.Chart.Result) == 0 {
-		return "", fmt.Errorf("no data returned for %s", symbol)
+		return "", 0, fmt.Errorf("no data returned for %s", symbol)
 	}
 
 	result := chartResp.Chart.Result[0]
 	if len(result.Indicators.Quote) == 0 || len(result.Indicators.Quote[0].Close) == 0 {
-		return "", fmt.Errorf("no price data for %s", symbol)
+		return "", 0, fmt.Errorf("no price data for %s", symbol)
 	}
 
-	// Get the latest close price
-	closes := result.Indicators.Quote[0].Close
-	for i := len(closes) - 1; i >= 0; i-- {
-		if closes[i] != 0 {
-			return fmt.Sprintf("%.6f", closes[i]), nil
+	quote := result.Indicators.Quote[0]
+
+	// Get the latest close price and corresponding volume
+	for i := len(quote.Close) - 1; i >= 0; i-- {
+		if quote.Close[i] != 0 {
+			var vol int64
+			if i < len(quote.Volume) {
+				vol = quote.Volume[i]
+			}
+			return fmt.Sprintf("%.6f", quote.Close[i]), vol, nil
 		}
 	}
 
-	return "", fmt.Errorf("no valid price found for %s", symbol)
+	return "", 0, fmt.Errorf("no valid price found for %s", symbol)
+}
+
+// FetchSplits fetches all stock split events from Yahoo Finance for a given symbol.
+// Returns split events with ratio = denominator/numerator
+// (the multiplier to adjust pre-split prices to post-split prices).
+func (p *TickerParser) FetchSplits(ctx context.Context, symbol string) ([]struct {
+	Ratio         float64
+	EffectiveDate time.Time
+}, error) {
+	url := fmt.Sprintf(
+		"https://query1.finance.yahoo.com/v8/finance/chart/%s?range=max&interval=1d&events=splits",
+		symbol,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; StockMentionBot/1.0)")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yahoo finance returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var chartResp yahooChartResponse
+	if err := json.Unmarshal(body, &chartResp); err != nil {
+		return nil, err
+	}
+
+	if chartResp.Chart.Error != nil {
+		return nil, fmt.Errorf("yahoo API error: %s", chartResp.Chart.Error.Description)
+	}
+
+	if len(chartResp.Chart.Result) == 0 {
+		return nil, nil
+	}
+
+	result := chartResp.Chart.Result[0]
+	if result.Events == nil || len(result.Events.Splits) == 0 {
+		return nil, nil
+	}
+
+	var splits []struct {
+		Ratio         float64
+		EffectiveDate time.Time
+	}
+
+	fmt.Printf("Found %d splits for %s\n", len(result.Events.Splits), symbol)
+
+	for _, split := range result.Events.Splits {
+		if split.Numerator == 0 {
+			continue
+		}
+		// ratio = denominator/numerator: for a 1:12 reverse split, ratio = 12
+		ratio := split.Denominator / split.Numerator
+		splits = append(splits, struct {
+			Ratio         float64
+			EffectiveDate time.Time
+		}{
+			Ratio:         ratio,
+			EffectiveDate: time.Unix(split.Date, 0),
+		})
+	}
+
+	return splits, nil
 }

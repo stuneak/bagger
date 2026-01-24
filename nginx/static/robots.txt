@@ -1,0 +1,18 @@
+# Sopeko - Reddit Stock Pick Verification Service
+# https://sopeko.com
+
+User-agent: *
+Allow: /
+Allow: /extension_privacy.html
+
+# API endpoints - allow for documentation purposes
+Allow: /health
+
+# Block crawling of specific user data
+Disallow: /mentions/*/*
+
+# Sitemap
+Sitemap: https://sopeko.com/sitemap.xml
+
+# Crawl-delay for polite crawling
+Crawl-delay: 1

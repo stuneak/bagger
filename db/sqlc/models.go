@@ -17,6 +17,14 @@ type Comment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type StockSplit struct {
+	ID            int64     `json:"id"`
+	TickerID      int64     `json:"ticker_id"`
+	Ratio         string    `json:"ratio"`
+	EffectiveDate time.Time `json:"effective_date"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 type Ticker struct {
 	ID          int64     `json:"id"`
 	Symbol      string    `json:"symbol"`
@@ -40,10 +48,18 @@ type TickerPrice struct {
 	TickerID   int64     `json:"ticker_id"`
 	Price      string    `json:"price"`
 	RecordedAt time.Time `json:"recorded_at"`
+	Volume     int64     `json:"volume"`
 }
 
 type User struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type Visitor struct {
+	ID        int64     `json:"id"`
+	IpAddress string    `json:"ip_address"`
+	Endpoint  string    `json:"endpoint"`
+	VisitedAt time.Time `json:"visited_at"`
 }

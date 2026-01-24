@@ -10,6 +10,31 @@ import (
 	"time"
 )
 
+const getHighestPriceAfterDate = `-- name: GetHighestPriceAfterDate :one
+SELECT price, recorded_at
+FROM ticker_prices
+WHERE ticker_id = $1 AND recorded_at >= $2
+ORDER BY price DESC
+LIMIT 1
+`
+
+type GetHighestPriceAfterDateParams struct {
+	TickerID   int64     `json:"ticker_id"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+type GetHighestPriceAfterDateRow struct {
+	Price      string    `json:"price"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+func (q *Queries) GetHighestPriceAfterDate(ctx context.Context, arg GetHighestPriceAfterDateParams) (GetHighestPriceAfterDateRow, error) {
+	row := q.db.QueryRowContext(ctx, getHighestPriceAfterDate, arg.TickerID, arg.RecordedAt)
+	var i GetHighestPriceAfterDateRow
+	err := row.Scan(&i.Price, &i.RecordedAt)
+	return i, err
+}
+
 const getLatestTickerPrice = `-- name: GetLatestTickerPrice :one
 SELECT price, recorded_at
 FROM ticker_prices
@@ -55,26 +80,33 @@ func (q *Queries) GetTickerPriceByDate(ctx context.Context, arg GetTickerPriceBy
 }
 
 const insertTickerPrice = `-- name: InsertTickerPrice :one
-INSERT INTO ticker_prices (ticker_id, price, recorded_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (ticker_id, recorded_at) DO UPDATE SET price = EXCLUDED.price
-RETURNING id, ticker_id, price, recorded_at
+INSERT INTO ticker_prices (ticker_id, price, volume, recorded_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (ticker_id, recorded_at) DO UPDATE SET price = EXCLUDED.price, volume = EXCLUDED.volume
+RETURNING id, ticker_id, price, recorded_at, volume
 `
 
 type InsertTickerPriceParams struct {
 	TickerID   int64     `json:"ticker_id"`
 	Price      string    `json:"price"`
+	Volume     int64     `json:"volume"`
 	RecordedAt time.Time `json:"recorded_at"`
 }
 
 func (q *Queries) InsertTickerPrice(ctx context.Context, arg InsertTickerPriceParams) (TickerPrice, error) {
-	row := q.db.QueryRowContext(ctx, insertTickerPrice, arg.TickerID, arg.Price, arg.RecordedAt)
+	row := q.db.QueryRowContext(ctx, insertTickerPrice,
+		arg.TickerID,
+		arg.Price,
+		arg.Volume,
+		arg.RecordedAt,
+	)
 	var i TickerPrice
 	err := row.Scan(
 		&i.ID,
 		&i.TickerID,
 		&i.Price,
 		&i.RecordedAt,
+		&i.Volume,
 	)
 	return i, err
 }

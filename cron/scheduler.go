@@ -14,10 +14,10 @@ import (
 var slog = log.New(log.Writer(), "[CRON] ", log.Flags())
 
 var subreddits = []string{
+	"wallstreetbets",
 	"pennystocks",
 	"investing",
 	"stocks",
-	"wallstreetbets",
 }
 
 type Scheduler struct {
@@ -78,140 +78,232 @@ func (s *Scheduler) syncTickers() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	slog.Println("Starting NASDAQ tickers sync")
+	slog.Println("syncTickers: job triggered, starting NASDAQ tickers sync")
 
 	stocks, err := s.nasdaqFetcher.FetchStocks(ctx)
 	if err != nil {
-		slog.Printf("Error fetching NASDAQ stocks: %v", err)
+		slog.Printf("syncTickers: error fetching NASDAQ stocks: %v", err)
 		return
 	}
 
-	slog.Printf("Fetched %d stocks from NASDAQ", len(stocks))
+	slog.Printf("syncTickers: fetched %d stocks from NASDAQ", len(stocks))
 
-	var synced int
+	var synced, skipped int
 	for _, stock := range stocks {
+		if strings.Contains(stock.Symbol, "^") || strings.Contains(stock.Symbol, "/") {
+			skipped++
+			continue
+		}
 		err := s.store.UpsertTicker(ctx, db.UpsertTickerParams{
 			Symbol:      stock.Symbol,
 			CompanyName: stock.Name,
 			Exchange:    "NASDAQ",
 		})
 		if err != nil {
-			slog.Printf("Error upserting ticker %s: %v", stock.Symbol, err)
+			slog.Printf("syncTickers: error upserting ticker %s: %v", stock.Symbol, err)
 			continue
 		}
 		synced++
 	}
 
-	slog.Printf("Synced %d tickers to database", synced)
+	slog.Printf("syncTickers: done - synced %d, skipped %d (contained ^ or /)", synced, skipped)
 }
 
 func (s *Scheduler) fetchAllTickerPrices() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	slog.Println("Starting daily ticker prices fetch")
+	slog.Println("fetchAllTickerPrices: job triggered, starting ticker prices fetch")
 
 	tickers, err := s.store.ListAllTickers(ctx)
 	if err != nil {
-		slog.Printf("Error fetching tickers: %v", err)
+		slog.Printf("fetchAllTickerPrices: error fetching tickers from DB: %v", err)
 		return
 	}
 
-	slog.Printf("Fetching prices for %d tickers", len(tickers))
+	slog.Printf("fetchAllTickerPrices: fetching prices for %d tickers", len(tickers))
 
 	now := time.Now()
-	var fetched, errors int
+	var fetched int
+	var errorSymbols []string
 
 	for i, ticker := range tickers {
-		if i > 0 && i%100 == 0 {
-			slog.Printf("Progress: %d/%d tickers processed (%d errors)", i, len(tickers), errors)
-		}
-
-		price, err := s.tickerParser.FetchCurrentPrice(ctx, ticker.Symbol)
-		if err != nil {
-			errors++
+		if strings.Contains(ticker.Symbol, "^") || strings.Contains(ticker.Symbol, "/") {
 			continue
 		}
+
+		if i > 0 && i%100 == 0 {
+			slog.Printf("fetchAllTickerPrices: progress %d/%d tickers processed (%d fetched, %d errors so far)", i, len(tickers), fetched, len(errorSymbols))
+		}
+
+		price, volume, priceTime, err := s.tickerParser.fetchHistoricalPrice(ctx, ticker.Symbol, now)
+		if err != nil {
+			if len(errorSymbols) < 10 {
+				slog.Printf("fetchAllTickerPrices: error fetching price for %s: %v", ticker.Symbol, err)
+			}
+			errorSymbols = append(errorSymbols, ticker.Symbol)
+			continue
+		}
+
+		slog.Printf("fetchAllTickerPrices: inserting price for %s: price=%v, volume=%v, time=%s", ticker.Symbol, price, volume, priceTime.Format(time.RFC3339))
 
 		_, err = s.store.InsertTickerPrice(ctx, db.InsertTickerPriceParams{
 			TickerID:   ticker.ID,
 			Price:      price,
-			RecordedAt: now,
+			Volume:     volume,
+			RecordedAt: priceTime,
 		})
 		if err != nil {
-			slog.Printf("Error inserting price for %s: %v", ticker.Symbol, err)
-			errors++
+			slog.Printf("fetchAllTickerPrices: error inserting price for %s (tickerID=%d): %v", ticker.Symbol, ticker.ID, err)
+			errorSymbols = append(errorSymbols, ticker.Symbol)
 			continue
 		}
+		slog.Printf("fetchAllTickerPrices: successfully inserted price for %s", ticker.Symbol)
 		fetched++
 	}
 
-	slog.Printf("Finished daily prices fetch: %d fetched, %d errors", fetched, errors)
+	slog.Printf("fetchAllTickerPrices: done - %d fetched, %d errors", fetched, len(errorSymbols))
+	if len(errorSymbols) > 0 {
+		slog.Printf("fetchAllTickerPrices: error symbols: %v", errorSymbols)
+	}
+}
+
+func (s *Scheduler) fetchAllSplits() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	slog.Println("fetchAllSplits: job triggered, starting stock splits fetch")
+
+	tickers, err := s.store.ListAllTickers(ctx)
+	if err != nil {
+		slog.Printf("fetchAllSplits: error fetching tickers from DB: %v", err)
+		return
+	}
+
+	slog.Printf("fetchAllSplits: processing %d tickers for splits", len(tickers))
+
+	var fetched, fetchErrors, insertErrors int
+	for i, ticker := range tickers {
+		if strings.Contains(ticker.Symbol, "^") || strings.Contains(ticker.Symbol, "/") {
+			continue
+		}
+
+		if i > 0 && i%100 == 0 {
+			slog.Printf("fetchAllSplits: progress %d/%d tickers processed (%d splits found, %d fetch errors, %d insert errors)", i, len(tickers), fetched, fetchErrors, insertErrors)
+		}
+
+		splits, err := s.tickerParser.FetchSplits(ctx, ticker.Symbol)
+		if err != nil {
+			fetchErrors++
+			if fetchErrors <= 10 {
+				slog.Printf("fetchAllSplits: error fetching splits for %s: %v", ticker.Symbol, err)
+			}
+			continue
+		}
+
+		slog.Printf("Found %d splits for %s", len(splits), ticker.Symbol)
+
+		for _, split := range splits {
+			slog.Printf("fetchAllSplits: inserting split for %s on %s (ratio %.4f)", ticker.Symbol, split.EffectiveDate.Format("2006-01-02"), split.Ratio)
+			err = s.store.InsertStockSplit(ctx, db.InsertStockSplitParams{
+				TickerID:      ticker.ID,
+				Ratio:         fmt.Sprintf("%.4f", split.Ratio),
+				EffectiveDate: split.EffectiveDate,
+			})
+			if err != nil {
+				slog.Printf("fetchAllSplits: error inserting split for %s: %v", ticker.Symbol, err)
+				insertErrors++
+				continue
+			}
+			fetched++
+		}
+	}
+
+	slog.Printf("fetchAllSplits: done - %d splits stored, %d fetch errors, %d insert errors (out of %d tickers)", fetched, fetchErrors, insertErrors, len(tickers))
 }
 
 func (s *Scheduler) RegisterJobs() error {
+	now := time.Now()
+	slog.Printf("RegisterJobs: registering all jobs at %s (location: %s)", now.Format(time.RFC3339), now.Location())
+
 	// NASDAQ tickers sync - once daily
+	tickerSyncStart := now.Add(5 * time.Second)
 	_, err := s.scheduler.NewJob(
 		gocron.DurationJob(24*time.Hour),
 		gocron.NewTask(func() {
+			slog.Println("RegisterJobs: nasdaq-tickers-sync job fired")
 			s.syncTickers()
 		}),
 		gocron.WithName("nasdaq-tickers-sync"),
-		gocron.WithStartAt(gocron.WithStartDateTime(time.Now().Add(5*time.Second))),
+		gocron.WithStartAt(gocron.WithStartDateTime(tickerSyncStart)),
 	)
 	if err != nil {
+		slog.Printf("RegisterJobs: error registering nasdaq-tickers-sync: %v", err)
 		return err
 	}
 
-	slog.Println("Registered NASDAQ tickers sync job (daily)")
+	slog.Printf("RegisterJobs: registered nasdaq-tickers-sync (every 24h, first run at %s)", tickerSyncStart.Format(time.RFC3339))
 
-	// Daily ticker prices fetch - 10:00 AM US Eastern
+	// Ticker prices fetch - every 2 hours, first run after 2h
+	pricesStart := now.Add(2 * time.Hour)
 	_, err = s.scheduler.NewJob(
-		gocron.CronJob("0 10 * * *", false),
+		gocron.DurationJob(2*time.Hour),
 		gocron.NewTask(func() {
+			slog.Println("RegisterJobs: ticker-prices job fired")
 			s.fetchAllTickerPrices()
 		}),
-		gocron.WithName("daily-ticker-prices"),
+		gocron.WithName("ticker-prices"),
+		gocron.WithStartAt(gocron.WithStartDateTime(pricesStart)),
 	)
 	if err != nil {
+		slog.Printf("RegisterJobs: error registering ticker-prices: %v", err)
 		return err
 	}
 
-	slog.Println("Registered daily ticker prices job (10:00 AM US Eastern)")
+	slog.Printf("RegisterJobs: registered ticker-prices (every 2h, first run at %s)", pricesStart.Format(time.RFC3339))
 
-	// Reddit scraping jobs - staggered by 1 hour, each runs every 4 hours
-	// First: 9:40, 13:40, 17:40, 21:40, 1:40, 5:40
-	// Second: 10:40, 14:40, 18:40, 22:40, 2:40, 6:40
-	// Third: 11:40, 15:40, 19:40, 23:40, 3:40, 7:40
-	// Fourth: 12:40, 16:40, 20:40, 0:40, 4:40, 8:40
+	// Stock splits fetch - every 12h
+	splitsStart := now.Add(12 * time.Hour)
+	_, err = s.scheduler.NewJob(
+		gocron.DurationJob(12*time.Hour),
+		gocron.NewTask(func() {
+			slog.Println("RegisterJobs: stock-splits job fired")
+			s.fetchAllSplits()
+		}),
+		gocron.WithName("stock-splits"),
+		gocron.WithStartAt(gocron.WithStartDateTime(splitsStart)),
+	)
+	if err != nil {
+		slog.Printf("RegisterJobs: error registering stock-splits: %v", err)
+		return err
+	}
+
+	slog.Printf("RegisterJobs: registered stock-splits (every 12h, first run at %s)", splitsStart.Format(time.RFC3339))
+
+	// Reddit scraping - every 1h, staggered
+	startDelays := []time.Duration{1 * time.Hour, 2 * time.Hour, 2 * time.Hour, 2 * time.Hour}
 	for i, subreddit := range subreddits {
 		sub := subreddit
-		startHour := 9 + i
-
-		// Generate hours for every 4 hours starting from startHour
-		var hours []string
-		for h := startHour; h < startHour+24; h += 4 {
-			hours = append(hours, fmt.Sprintf("%d", h%24))
-		}
-		hourList := strings.Join(hours, ",")
+		subStart := now.Add(startDelays[i])
 
 		_, err := s.scheduler.NewJob(
-			gocron.CronJob(
-				fmt.Sprintf("40 %s * * *", hourList),
-				false,
-			),
+			gocron.DurationJob(1*time.Hour),
 			gocron.NewTask(func() {
+				slog.Printf("RegisterJobs: reddit-scrape-%s job fired", sub)
 				s.scrapeSubreddit(sub)
 			}),
 			gocron.WithName("reddit-scrape-"+sub),
+			gocron.WithStartAt(gocron.WithStartDateTime(subStart)),
 		)
 		if err != nil {
+			slog.Printf("RegisterJobs: error registering reddit-scrape-%s: %v", sub, err)
 			return err
 		}
 
-		slog.Printf("Registered Reddit scrape job for r/%s (every 4h at :40, starting %d:40 US Eastern)", sub, startHour)
+		slog.Printf("RegisterJobs: registered reddit-scrape-%s (every 1h, first run at %s)", sub, subStart.Format(time.RFC3339))
 	}
 
+	slog.Printf("RegisterJobs: all %d jobs registered successfully", 3+len(subreddits))
 	return nil
 }
 

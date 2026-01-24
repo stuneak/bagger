@@ -1,0 +1,30 @@
+# Sopeko
+
+> Verify Reddit stock picks with real performance data
+
+Sopeko is a service that tracks stock ticker mentions on Reddit and shows how those picks have performed over time. Users can look up any Reddit username to see their historical stock picks and actual returns.
+
+## What Sopeko Does
+
+- Scrapes stock ticker mentions from Reddit communities (r/wallstreetbets, r/stocks, r/investing, r/pennystocks)
+- Records the stock price at the time of mention
+- Tracks price changes over time to calculate actual returns
+- Provides a Chrome extension that displays performance badges next to Reddit usernames
+- Offers a web interface for looking up any Reddit user's stock pick history
+
+## API
+
+The service provides a simple REST API:
+
+- `GET /health` - Service health check
+- `GET /mentions/{username}` - Get stock picks for a Reddit user
+
+## Links
+
+- Website: https://sopeko.com
+- Chrome Extension: https://github.com/stuneak/sopeko_extension/
+- Privacy Policy: https://sopeko.com/extension_privacy.html
+
+## Contact
+
+For questions or issues, visit the GitHub repository.
