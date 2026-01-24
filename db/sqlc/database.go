@@ -2,21 +2,25 @@ package db
 
 import (
 	"database/sql"
-	"log"
 
 	_ "github.com/lib/pq"
+	"github.com/stuneak/sopeko/pkg/logger"
 )
+
+var dblog = logger.NewLogger("DB")
 
 func NewDB(driver, source string) (*sql.DB, error) {
 	db, err := sql.Open(driver, source)
 	if err != nil {
+		dblog("failed to open connection: %v", err)
 		return nil, err
 	}
 
 	if err = db.Ping(); err != nil {
+		dblog("ping failed: %v", err)
 		return nil, err
 	}
 
-	log.Println("Database connected successfully")
+	dblog("connected successfully")
 	return db, nil
 }

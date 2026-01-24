@@ -5,24 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
+
+	"github.com/stuneak/sopeko/pkg/logger"
 )
 
-var redditLogger = log.New(log.Writer(), "[REDDIT] ", log.Flags())
-
-func rlog(format string, args ...interface{}) {
-	pc, _, _, _ := runtime.Caller(1)
-	fn := runtime.FuncForPC(pc).Name()
-	if i := strings.LastIndex(fn, "."); i >= 0 {
-		fn = fn[i+1:]
-	}
-	redditLogger.Printf(fn+": "+format, args...)
-}
+var rlog = logger.NewLogger("REDDIT")
 
 const (
 	redditBaseURL = "https://www.reddit.com"

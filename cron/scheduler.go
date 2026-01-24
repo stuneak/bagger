@@ -3,26 +3,16 @@ package cron
 import (
 	"context"
 	"fmt"
-	"log"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 	external_api "github.com/stuneak/sopeko/cron/external_api"
 	db "github.com/stuneak/sopeko/db/sqlc"
+	"github.com/stuneak/sopeko/pkg/logger"
 )
 
-var baseLogger = log.New(log.Writer(), "[CRON] ", log.Flags())
-
-func clog(format string, args ...interface{}) {
-	pc, _, _, _ := runtime.Caller(1)
-	fn := runtime.FuncForPC(pc).Name()
-	if i := strings.LastIndex(fn, "."); i >= 0 {
-		fn = fn[i+1:]
-	}
-	baseLogger.Printf(fn+": "+format, args...)
-}
+var clog = logger.NewLogger("CRON")
 
 var subreddits = []string{
 	"pennystocks",

@@ -5,23 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"runtime"
-	"strings"
 	"time"
+
+	"github.com/stuneak/sopeko/pkg/logger"
 )
 
-var yahooLogger = log.New(log.Writer(), "[YAHOO] ", log.Flags())
-
-func ylog(format string, args ...interface{}) {
-	pc, _, _, _ := runtime.Caller(1)
-	fn := runtime.FuncForPC(pc).Name()
-	if i := strings.LastIndex(fn, "."); i >= 0 {
-		fn = fn[i+1:]
-	}
-	yahooLogger.Printf(fn+": "+format, args...)
-}
+var ylog = logger.NewLogger("YAHOO")
 
 type YahooFetcher struct {
 	client *http.Client

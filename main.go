@@ -1,23 +1,24 @@
 package main
 
 import (
-	"log"
-
 	"github.com/stuneak/sopeko/api"
 	"github.com/stuneak/sopeko/config"
 	"github.com/stuneak/sopeko/cron"
 	db "github.com/stuneak/sopeko/db/sqlc"
+	"github.com/stuneak/sopeko/pkg/logger"
 )
+
+var fatal = logger.NewFatalLogger("MAIN")
 
 func main() {
 	config, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal("cannot load config:", err)
+		fatal("cannot load config: %v", err)
 	}
 
 	conn, err := db.NewDB(config.DBDriver, config.DBSource)
 	if err != nil {
-		log.Fatal("cannot connect to db:", err)
+		fatal("cannot connect to db: %v", err)
 	}
 	defer conn.Close()
 
@@ -26,12 +27,12 @@ func main() {
 	// Initialize and start cron scheduler
 	scheduler, err := cron.NewScheduler(store)
 	if err != nil {
-		log.Fatal("cannot create scheduler:", err)
+		fatal("cannot create scheduler: %v", err)
 	}
 
 	err = scheduler.RegisterJobs()
 	if err != nil {
-		log.Fatal("cannot register cron jobs:", err)
+		fatal("cannot register cron jobs: %v", err)
 	}
 
 	scheduler.Start()
@@ -41,6 +42,6 @@ func main() {
 
 	err = server.Start(config.ServerAddress)
 	if err != nil {
-		log.Fatal("cannot start server:", err)
+		fatal("cannot start server: %v", err)
 	}
 }
