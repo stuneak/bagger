@@ -129,6 +129,24 @@ func (s *Scheduler) processRedditContent(ctx context.Context, author, externalID
 			continue // ticker not in our database
 		}
 
+		// Ensure a ticker price exists before createdAt
+		_, err = s.store.GetTickerPriceBeforeDate(ctx, db.GetTickerPriceBeforeDateParams{
+			TickerID:   ticker.ID,
+			RecordedAt: createdAt,
+		})
+		if err != nil {
+			// No price found, fetch from Yahoo and store
+			price, volume, recordedAt, fetchErr := s.yahooFetcher.FetchHistoricalPrice(ctx, symbol, createdAt)
+			if fetchErr == nil {
+				s.store.InsertTickerPrice(ctx, db.InsertTickerPriceParams{
+					TickerID:   ticker.ID,
+					Price:      fmt.Sprintf("%.2f", price),
+					Volume:     volume,
+					RecordedAt: recordedAt,
+				})
+			}
+		}
+
 		s.store.CreateTickerMention(ctx, db.CreateTickerMentionParams{
 			TickerID:    ticker.ID,
 			UserID:      user.ID,

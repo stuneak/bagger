@@ -23,6 +23,7 @@ type Querier interface {
 	GetSplitsBetweenDates(ctx context.Context, arg GetSplitsBetweenDatesParams) ([]GetSplitsBetweenDatesRow, error)
 	GetSplitsByTicker(ctx context.Context, tickerID int64) ([]TickerSplit, error)
 	GetTickerBySymbol(ctx context.Context, symbol string) (TickerName, error)
+	GetTickerPriceBeforeDate(ctx context.Context, arg GetTickerPriceBeforeDateParams) (TickerPrice, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	GetUserMentionsComplete(ctx context.Context, arg GetUserMentionsCompleteParams) ([]GetUserMentionsCompleteRow, error)
 	GetVisitorCountAll(ctx context.Context) (int64, error)

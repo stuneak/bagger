@@ -105,6 +105,72 @@ func (y *YahooFetcher) FetchCurrentPriceAndVolume(ctx context.Context, symbol st
 	return meta.RegularMarketPrice, meta.RegularMarketVolume, time.Unix(meta.RegularMarketTime, 0), nil
 }
 
+// FetchHistoricalPrice fetches the closing price and volume for a symbol around the given time.
+func (y *YahooFetcher) FetchHistoricalPrice(ctx context.Context, symbol string, date time.Time) (price float64, volume int64, recordedAt time.Time, err error) {
+	start := date.Add(-2 * time.Hour)
+
+	url := fmt.Sprintf(
+		"https://query1.finance.yahoo.com/v8/finance/chart/%s?period1=%d&period2=%d&interval=1d",
+		symbol, start.Unix(), date.Unix(),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, 0, time.Time{}, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; StockMentionBot/1.0)")
+
+	resp, err := y.client.Do(req)
+	if err != nil {
+		return 0, 0, time.Time{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, time.Time{}, fmt.Errorf("yahoo finance returned status %d for %s", resp.StatusCode, symbol)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, time.Time{}, err
+	}
+
+	var chartResp yahooChartResponse
+	if err := json.Unmarshal(body, &chartResp); err != nil {
+		return 0, 0, time.Time{}, err
+	}
+
+	if chartResp.Chart.Error != nil {
+		return 0, 0, time.Time{}, fmt.Errorf("yahoo API error for %s: %s", symbol, chartResp.Chart.Error.Description)
+	}
+
+	if len(chartResp.Chart.Result) == 0 {
+		return 0, 0, time.Time{}, fmt.Errorf("no chart data for %s on %s", symbol, date.Format("2006-01-02"))
+	}
+
+	result := chartResp.Chart.Result[0]
+	if len(result.Indicators.Quote) == 0 || len(result.Indicators.Quote[0].Close) == 0 {
+		return 0, 0, time.Time{}, fmt.Errorf("no price data for %s on %s", symbol, date.Format("2006-01-02"))
+	}
+
+	closePrice := result.Indicators.Quote[0].Close[0]
+	if closePrice == nil {
+		return 0, 0, time.Time{}, fmt.Errorf("nil close price for %s on %s", symbol, date.Format("2006-01-02"))
+	}
+
+	var vol int64
+	if len(result.Indicators.Quote[0].Volume) > 0 && result.Indicators.Quote[0].Volume[0] != nil {
+		vol = *result.Indicators.Quote[0].Volume[0]
+	}
+
+	ts := date
+	if len(result.Timestamp) > 0 {
+		ts = time.Unix(result.Timestamp[0], 0)
+	}
+
+	return *closePrice, vol, ts, nil
+}
+
 // FetchSplits fetches all stock split events for a symbol.
 func (y *YahooFetcher) FetchSplits(ctx context.Context, symbol string) ([]SplitEvent, error) {
 	url := fmt.Sprintf(

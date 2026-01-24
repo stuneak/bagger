@@ -25,6 +25,32 @@ func (q *Queries) DeleteTickerPriceByDate(ctx context.Context, arg DeleteTickerP
 	return err
 }
 
+const getTickerPriceBeforeDate = `-- name: GetTickerPriceBeforeDate :one
+SELECT id, ticker_id, price, recorded_at, volume
+FROM ticker_prices
+WHERE ticker_id = $1 AND recorded_at <= $2
+ORDER BY recorded_at DESC
+LIMIT 1
+`
+
+type GetTickerPriceBeforeDateParams struct {
+	TickerID   int64     `json:"ticker_id"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+func (q *Queries) GetTickerPriceBeforeDate(ctx context.Context, arg GetTickerPriceBeforeDateParams) (TickerPrice, error) {
+	row := q.db.QueryRowContext(ctx, getTickerPriceBeforeDate, arg.TickerID, arg.RecordedAt)
+	var i TickerPrice
+	err := row.Scan(
+		&i.ID,
+		&i.TickerID,
+		&i.Price,
+		&i.RecordedAt,
+		&i.Volume,
+	)
+	return i, err
+}
+
 const insertTickerPrice = `-- name: InsertTickerPrice :one
 INSERT INTO ticker_prices (ticker_id, price, volume, recorded_at)
 VALUES ($1, $2, $3, $4)

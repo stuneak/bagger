@@ -5,6 +5,13 @@ ON CONFLICT (ticker_id, recorded_at) DO UPDATE SET price = EXCLUDED.price, volum
 RETURNING *;
 
 
+-- name: GetTickerPriceBeforeDate :one
+SELECT id, ticker_id, price, recorded_at, volume
+FROM ticker_prices
+WHERE ticker_id = $1 AND recorded_at <= $2
+ORDER BY recorded_at DESC
+LIMIT 1;
+
 -- name: DeleteTickerPriceByDate :exec
 DELETE FROM ticker_prices
 WHERE ticker_id = $1 AND DATE(recorded_at) = DATE($2);
