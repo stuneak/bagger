@@ -1,5 +1,5 @@
 
-CREATE TABLE tickers (
+CREATE TABLE ticker_names (
   id            BIGSERIAL PRIMARY KEY,
   symbol        TEXT NOT NULL UNIQUE,
   company_name  TEXT NOT NULL,

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	_ "github.com/stuneak/sopeko/db/sqlc"
+	db "github.com/stuneak/sopeko/db/sqlc"
 )
 
 // Excluded usernames (mods, bots, special accounts)
@@ -49,37 +49,39 @@ type MentionResponse struct {
 func (server *Server) getUserMentions(ctx *gin.Context) {
 	username := ctx.Param("username")
 
-	mentions, err := server.store.GetFirstMentionPerTickerByUsername(ctx, username)
+	for _, u := range excludedUsernames {
+		if u == username {
+			ctx.JSON(http.StatusOK, []MentionResponse{})
+			return
+		}
+	}
+
+	cutoffTime := parsePeriodCutoff(ctx.Query("period"))
+
+	mentions, err := server.store.GetUserMentionsComplete(ctx, db.GetUserMentionsCompleteParams{
+		Username:    username,
+		MentionedAt: cutoffTime,
+	})
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	if len(mentions) == 0 {
-		ctx.JSON(http.StatusOK, []MentionResponse{})
-		return
-	}
+	results := make([]MentionResponse, 0, len(mentions))
+	for _, m := range mentions {
+		mentionPrice := fmt.Sprintf("%v", m.MentionPrice)
+		currentPrice := fmt.Sprintf("%v", m.CurrentPrice)
 
-	results := []MentionResponse{}
+		adjustedMentionPrice := adjustPriceForSplits(mentionPrice, m.SplitRatio)
 
-	for _, mention := range mentions {
-		adjustedMentionPrice := mention.MentionPrice
-		if mention.CalculatedSplitRatio != 1.0 {
-			mp, err := strconv.ParseFloat(mention.MentionPrice, 64)
-			if err == nil {
-				adjustedMentionPrice = fmt.Sprintf("%.2f", mp*mention.CalculatedSplitRatio)
-			}
-		}
-
-		percentChange := calculatePercentChange(adjustedMentionPrice, mention.CurrentPrice)
 		results = append(results, MentionResponse{
-			Symbol:           mention.Symbol,
+			Symbol:           m.Symbol,
 			MentionPrice:     adjustedMentionPrice,
-			CurrentPrice:     mention.CurrentPrice,
-			CurrentPriceDate: mention.CurrentPriceDate,
-			PercentChange:    percentChange,
-			SplitRatio:       mention.CalculatedSplitRatio,
-			MentionedAt:      mention.MentionedAt,
+			CurrentPrice:     currentPrice,
+			CurrentPriceDate: m.CurrentPriceDate,
+			PercentChange:    calculatePercentChange(adjustedMentionPrice, currentPrice),
+			SplitRatio:       m.SplitRatio,
+			MentionedAt:      m.MentionedAt,
 		})
 	}
 
@@ -87,20 +89,51 @@ func (server *Server) getUserMentions(ctx *gin.Context) {
 }
 
 func calculatePercentChange(oldPrice, newPrice string) string {
-	old, err := strconv.ParseFloat(oldPrice, 64)
-	if err != nil || old == 0 {
-		return "0.00%"
-	}
-	new, err := strconv.ParseFloat(newPrice, 64)
-	if err != nil {
-		return "0.00%"
-	}
-
-	change := ((new - old) / old) * 100
+	change := calculatePercentChangeFloat(oldPrice, newPrice)
 	if change >= 0 {
 		return fmt.Sprintf("+%.2f%%", change)
 	}
 	return fmt.Sprintf("%.2f%%", change)
+}
+
+func calculatePercentChangeFloat(oldPrice, newPrice string) float64 {
+	old, err := strconv.ParseFloat(oldPrice, 64)
+	if err != nil || old == 0 {
+		return 0
+	}
+	newP, err := strconv.ParseFloat(newPrice, 64)
+	if err != nil {
+		return 0
+	}
+	return ((newP - old) / old) * 100
+}
+
+func adjustPriceForSplits(price string, splitRatio float64) string {
+	p, err := strconv.ParseFloat(price, 64)
+	if err != nil {
+		return price
+	}
+
+	adjustedMentionPrice := p
+	if splitRatio != 1.0 {
+		adjustedMentionPrice = p * splitRatio
+	}
+
+	return fmt.Sprintf("%.2f", adjustedMentionPrice)
+}
+
+func parsePeriodCutoff(period string) time.Time {
+	now := time.Now()
+	switch period {
+	case "daily":
+		return now.AddDate(0, 0, -1)
+	case "weekly":
+		return now.AddDate(0, 0, -7)
+	case "monthly":
+		return now.AddDate(0, -1, 0)
+	default:
+		return time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
 }
 
 func (server *Server) getExcludedUsernames(ctx *gin.Context) {
@@ -140,198 +173,113 @@ func (server *Server) getWorstPerformingPicks(ctx *gin.Context) {
 }
 
 func (server *Server) getPerformingPicks(ctx *gin.Context, topPerformers bool) {
-	// Parse time period filter: "weekly", "monthly", or empty for all time
-	period := ctx.Query("period")
-	var cutoffTime time.Time
-	now := time.Now()
-	switch period {
-	case "daily":
-		cutoffTime = now.AddDate(0, 0, -1)
-	case "weekly":
-		cutoffTime = now.AddDate(0, 0, -7)
-	case "monthly":
-		cutoffTime = now.AddDate(0, -1, 0)
-	default:
-		cutoffTime = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
-
-	picks, err := server.store.GetAllPicksWithPricesAndSplitsSince(ctx, cutoffTime)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	cutoffTime := parsePeriodCutoff(ctx.Query("period"))
 
 	excludedMap := make(map[string]bool)
 	for _, u := range excludedUsernames {
 		excludedMap[u] = true
 	}
 
-	// Track first mention per ticker (unique across all users)
-	firstMentionPerTicker := make(map[int64]struct {
-		symbol               string
-		mentionPrice         string
-		currentPrice         string
-		currentPriceDate     time.Time
-		calculatedSplitRatio float64
-		mentionedAt          time.Time
-	})
-
-	for _, pick := range picks {
-		if excludedMap[pick.Username] {
-			continue
-		}
-		if existing, ok := firstMentionPerTicker[pick.TickerID]; !ok || pick.MentionedAt.Before(existing.mentionedAt) {
-			firstMentionPerTicker[pick.TickerID] = struct {
-				symbol               string
-				mentionPrice         string
-				currentPrice         string
-				currentPriceDate     time.Time
-				calculatedSplitRatio float64
-				mentionedAt          time.Time
-			}{
-				symbol:               pick.Symbol,
-				mentionPrice:         pick.MentionPrice,
-				currentPrice:         pick.CurrentPrice,
-				currentPriceDate:     pick.CurrentPriceDate,
-				calculatedSplitRatio: pick.CalculatedSplitRatio,
-				mentionedAt:          pick.MentionedAt,
-			}
-		}
+	mentions, err := server.store.GetAllMentionsComplete(ctx, cutoffTime)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
-	var results []PickPerformanceResponse
-
-	for _, pick := range firstMentionPerTicker {
-		mentionPrice, err := strconv.ParseFloat(pick.mentionPrice, 64)
-		if err != nil || mentionPrice <= 0 {
+	results := make([]PickPerformanceResponse, 0)
+	for _, m := range mentions {
+		if excludedMap[m.Username] {
 			continue
 		}
 
-		currPrice, err := strconv.ParseFloat(pick.currentPrice, 64)
-		if err != nil {
-			continue
-		}
+		mentionPrice := fmt.Sprintf("%v", m.MentionPrice)
+		currentPrice := fmt.Sprintf("%v", m.CurrentPrice)
+		adjustedMentionPrice := adjustPriceForSplits(mentionPrice, m.SplitRatio)
+		pctChange := calculatePercentChangeFloat(adjustedMentionPrice, currentPrice)
 
-		adjustedMentionPrice := mentionPrice
-		if pick.calculatedSplitRatio != 1.0 {
-			mp, err := strconv.ParseFloat(pick.mentionPrice, 64)
-			if err == nil {
-				adjustedMentionPrice = mp * pick.calculatedSplitRatio
-			}
-		}
-
-		percentChange := ((currPrice - adjustedMentionPrice) / adjustedMentionPrice) * 100
 		results = append(results, PickPerformanceResponse{
-			Symbol:           pick.symbol,
-			MentionPrice:     fmt.Sprintf("%.2f", adjustedMentionPrice),
-			CurrentPrice:     pick.currentPrice,
-			CurrentPriceDate: pick.currentPriceDate,
-			PercentChange:    percentChange,
-			SplitRatio:       pick.calculatedSplitRatio,
-			MentionedAt:      pick.mentionedAt,
+			Symbol:           m.Symbol,
+			MentionPrice:     adjustedMentionPrice,
+			CurrentPrice:     currentPrice,
+			CurrentPriceDate: m.CurrentPriceDate,
+			PercentChange:    pctChange,
+			SplitRatio:       m.SplitRatio,
+			MentionedAt:      m.MentionedAt,
 		})
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		if topPerformers {
+	if topPerformers {
+		sort.Slice(results, func(i, j int) bool {
 			return results[i].PercentChange > results[j].PercentChange
-		}
-		return results[i].PercentChange < results[j].PercentChange
-	})
+		})
+	} else {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].PercentChange < results[j].PercentChange
+		})
+	}
 
-	if len(results) > 10 {
-		results = results[:10]
+	if len(results) > 50 {
+		results = results[:50]
 	}
 
 	ctx.JSON(http.StatusOK, results)
 }
 
 func (server *Server) getTopPerformingUsers(ctx *gin.Context) {
-	// Parse time period filter: "weekly", "monthly", or empty for all time
-	period := ctx.Query("period")
-	var cutoffTime time.Time
-	now := time.Now()
-	switch period {
-	case "daily":
-		cutoffTime = now.AddDate(0, 0, -1)
-	case "weekly":
-		cutoffTime = now.AddDate(0, 0, -7)
-	case "monthly":
-		cutoffTime = now.AddDate(0, -1, 0)
-	default:
-		// No filter - use a very old date to include all
-		cutoffTime = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
-
-	picks, err := server.store.GetUniqueUserPicksWithLatestPricesSince(ctx, cutoffTime)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	cutoffTime := parsePeriodCutoff(ctx.Query("period"))
 
 	excludedMap := make(map[string]bool)
 	for _, u := range excludedUsernames {
 		excludedMap[u] = true
 	}
 
+	mentions, err := server.store.GetAllMentionsComplete(ctx, cutoffTime)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	users := make(map[string]*TopUserResponse)
-
-	for _, pick := range picks {
-		if excludedMap[pick.Username] {
+	for _, m := range mentions {
+		if excludedMap[m.Username] {
 			continue
 		}
 
-		pickPrice, _ := strconv.ParseFloat(pick.MentionPrice, 64)
-		currPrice, _ := strconv.ParseFloat(pick.CurrentPrice, 64)
+		mentionPrice := fmt.Sprintf("%v", m.MentionPrice)
+		currentPrice := fmt.Sprintf("%v", m.CurrentPrice)
+		adjustedMentionPrice := adjustPriceForSplits(mentionPrice, m.SplitRatio)
+		pctChange := calculatePercentChangeFloat(adjustedMentionPrice, currentPrice)
 
-		adjustedPickPrice := pickPrice
-		if pick.CalculatedSplitRatio != 1.0 {
-			mp, err := strconv.ParseFloat(pick.MentionPrice, 64)
-			if err == nil {
-				adjustedPickPrice = mp * pick.CalculatedSplitRatio
-			}
-		}
-
-		percentGain := ((currPrice - adjustedPickPrice) / adjustedPickPrice) * 100
-
-		if percentGain == 0 {
-			continue
-		}
-
-		if users[pick.Username] == nil {
-			users[pick.Username] = &TopUserResponse{
-				Username: pick.Username,
+		user, exists := users[m.Username]
+		if !exists {
+			user = &TopUserResponse{
+				Username: m.Username,
 				Picks:    []PickDetail{},
 			}
+			users[m.Username] = user
 		}
 
-		users[pick.Username].TotalPercentGain += percentGain
-		users[pick.Username].Picks = append(users[pick.Username].Picks, PickDetail{
-			Symbol:       pick.Symbol,
-			PickPrice:    fmt.Sprintf("%.2f", adjustedPickPrice),
-			CurrentPrice: pick.CurrentPrice,
-			PercentGain:  percentGain,
-			SplitRatio:   pick.CalculatedSplitRatio,
+		user.TotalPercentGain += pctChange
+		user.Picks = append(user.Picks, PickDetail{
+			Symbol:       m.Symbol,
+			PickPrice:    adjustedMentionPrice,
+			CurrentPrice: currentPrice,
+			PercentGain:  pctChange,
+			SplitRatio:   m.SplitRatio,
 		})
 	}
 
 	results := make([]TopUserResponse, 0, len(users))
-	for _, stats := range users {
-		results = append(results, *stats)
+	for _, u := range users {
+		results = append(results, *u)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].TotalPercentGain > results[j].TotalPercentGain
 	})
 
-	if len(results) > 10 {
-		results = results[:10]
-	}
-
-	for i := range results {
-		sort.Slice(results[i].Picks, func(a, b int) bool {
-			return results[i].Picks[a].PercentGain > results[i].Picks[b].PercentGain
-		})
+	if len(results) > 50 {
+		results = results[:50]
 	}
 
 	ctx.JSON(http.StatusOK, results)

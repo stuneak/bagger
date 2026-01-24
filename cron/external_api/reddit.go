@@ -1,12 +1,12 @@
-package cron
+package external_api
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -16,7 +16,76 @@ const (
 	userAgent     = "Mozilla/5.0 (compatible; StockMentionBot/1.0)"
 )
 
-var rlog = log.New(log.Writer(), "[REDDIT] ", log.Flags())
+var nyLoc = func() *time.Location {
+	loc, _ := time.LoadLocation("America/New_York")
+	return loc
+}()
+
+var skipList = []string{
+	"YMMV", "EPS", "TAKE", "MAY", "YOUVE", "ONLY", "LOST", "MONEY", "IF", "YOU",
+	"SELL", "YOUR", "USA", "AUS", "UK", "STOCK", "DUE", "FOMO", "SOB", "NO",
+	"ETF", "POS", "PENNY", "GTFOH", "NOT", "TOTAL", "DD", "YOLO", "WSB", "RH",
+	"FOR", "THE", "MOON", "BUY", "HOLD", "OP", "GATE", "KEEP", "EV", "TRYING",
+	"TWICE", "EVERY", "YET", "MOOOON", "THREE", "MEDUSA", "ANNUAL", "MOVERS",
+	"VOLUME", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "ALASKA",
+	"FIRE", "IMHO", "PTSD", "HUGE", "GENIUS", "SCAN", "BAG", "TICKER", "THIS",
+	"WEEK", "LETS", "GOOOO", "NASA", "STILL", "OKAY", "RIGHT", "LEMME", "THICC",
+	"BEFORE", "GLOBE", "EBITDA", "LMAO", "FAFO", "GET", "LEFT", "BEHIND", "CLASS",
+	"VERY", "ADVENT", "HEALTH", "BOYS", "WHICH", "ONE", "JONES", "SODA", "OTC",
+	"AND", "RSS", "MARKET", "OF", "SAME", "SUPER", "TOXIC", "ALSO", "NEOW",
+	"NASDAQ", "EUR", "USD", "US", "NVIDIA", "IIRC", "ALONE", "WHAT", "SAID",
+	"ABOVE", "ADVICE", "DYOR", "ALWAYS", "FOOD", "NYSE", "ISA", "SPX", "BUT",
+	"MAYBE", "CALLS", "DRILL", "BABY", "TRUMP", "SHIB", "WILL", "RIP", "EXCEPT",
+	"CRYPTO", "DOE", "MIT", "RSI", "DONT", "ENTIRE", "AI", "XYZ", "IS", "LOOK",
+	"AT", "IN", "AH", "TODAY", "TIKTOK", "TSA", "CEO", "FDA", "PDUFA", "CTRL",
+	"SWOT", "BS", "REAL", "BRUH", "CANADA", "LONG", "LOL", "WAY", "WTF", "PUMP",
+	"DUMP", "NEW", "FLAGS", "BOUGHT", "PEAK", "HOLDER", "EOY", "EOW", "IPO",
+	"URANUS", "LIGMA", "HELOC", "FY", "LUL", "IT", "PT", "DC", "RS", "LOT",
+	"ALT", "PE", "VC", "IBKR", "ATH", "IMO", "NDA", "RELIEF", "COVID", "YTD",
+	"MASH", "RUG", "PULL", "PS", "TN", "CUSIP", "FTD", "UCSF", "DO", "IDK",
+	"IP", "PR", "IR", "SOME", "GAP", "KEY", "FAST", "DAY", "ANY", "AM", "CALL",
+	"PUT", "EXP", "DNN", "MAG", "ARE", "WE", "MA", "MAN", "UP", "DOWN", "AX",
+	"LSE", "AMEX", "AMS", "NEVER", "EVER", "COULD", "BE", "NEXT", "IQ", "PB",
+	"API", "III", "II", "I", "GL", "ALL", "BIO", "LOW", "BEWARE", "HERE", "INFO",
+	"TOUR", "TOP", "BACK", "HOOD", "PD", "PM", "EST", "ICE", "MAGA", "TS", "SCI",
+	"DTE", "CC", "NOW", "GO", "EOD", "TACO", "EU", "IRS", "GOOD", "BAD", "LINK",
+	"DNA", "CPU", "GPU", "RAM", "SSD", "HDD", "CTO", "ASX", "ARR", "SO",
+}
+
+var tickersToSkip = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(skipList))
+	for _, s := range skipList {
+		m[s] = struct{}{}
+	}
+	return m
+}()
+
+// tickerRegex matches uppercase words (2-7 chars) that could be tickers.
+// Also matches $TICKER format.
+var tickerRegex = regexp.MustCompile(`\$?([A-Z]{2,7})\b`)
+
+// ExtractTickers extracts potential ticker symbols from text,
+// filtering out common English words and abbreviations.
+func ExtractTickers(text string) []string {
+	matches := tickerRegex.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]bool)
+	var tickers []string
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		ticker := strings.ToUpper(match[1])
+		_, skip := tickersToSkip[ticker]
+		if seen[ticker] || skip {
+			continue
+		}
+		seen[ticker] = true
+		tickers = append(tickers, ticker)
+	}
+
+	return tickers
+}
 
 type RedditScraper struct {
 	client *http.Client
@@ -156,7 +225,7 @@ func (r *RedditScraper) FetchSubredditPosts(ctx context.Context, subreddit strin
 
 		done := false
 		for _, c := range resp.Data.Children {
-			t := time.Unix(int64(c.Data.CreatedUTC), 0)
+			t := time.Unix(int64(c.Data.CreatedUTC), 0).In(nyLoc)
 			if t.Before(cutoff) {
 				done = true
 				break
@@ -193,7 +262,6 @@ func (r *RedditScraper) FetchPostComments(ctx context.Context, subreddit, postID
 
 		body, err := r.makeRequest(ctx, url)
 		if err != nil {
-			rlog.Printf("Warning: fetch comments sort=%s: %v", sort, err)
 			continue
 		}
 
@@ -207,7 +275,6 @@ func (r *RedditScraper) FetchPostComments(ctx context.Context, subreddit, postID
 		}
 
 		if len(moreIDs) > 0 {
-			rlog.Printf("Post %s: fetching %d more children (sort=%s)", postID, len(moreIDs), sort)
 			more, _ := r.fetchMoreChildren(ctx, postID, moreIDs, seen)
 			comments = append(comments, more...)
 		}
@@ -292,8 +359,6 @@ func (r *RedditScraper) fetchMoreChildren(ctx context.Context, postID string, id
 			}
 		}
 
-		rlog.Printf("Post %s: batch %d, fetching %d IDs, %d remaining", postID, i+1, len(batch), len(pending))
-
 		url := fmt.Sprintf("%s/api/morechildren.json?api_type=json&link_id=t3_%s&children=%s&limit_children=false",
 			redditBaseURL, postID, strings.Join(batch, ","))
 
@@ -336,35 +401,26 @@ func (r *RedditScraper) fetchMoreChildren(ctx context.Context, postID string, id
 }
 
 func (r *RedditScraper) ScrapeSubreddit(ctx context.Context, subreddit string) ([]RedditPost, []RedditComment, error) {
-	rlog.Printf("Starting scrape for r/%s", subreddit)
-
 	posts, err := r.FetchSubredditPosts(ctx, subreddit)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	rlog.Printf("Found %d posts in r/%s", len(posts), subreddit)
-
 	var allComments []RedditComment
 
-	for i, post := range posts {
+	for _, post := range posts {
 		if post.NumComments == 0 {
 			continue
 		}
 
 		comments, err := r.FetchPostComments(ctx, subreddit, post.ID)
 		if err != nil {
-			rlog.Printf("Warning: post %s: %v", post.ID, err)
 			continue
 		}
 
 		allComments = append(allComments, comments...)
-		rlog.Printf("Post %d/%d (%s): %d comments (expected ~%d)",
-			i+1, len(posts), post.ID, len(comments), post.NumComments)
-
 		time.Sleep(2 * time.Second)
 	}
 
-	rlog.Printf("Done r/%s: %d posts, %d comments", subreddit, len(posts), len(allComments))
 	return posts, allComments, nil
 }

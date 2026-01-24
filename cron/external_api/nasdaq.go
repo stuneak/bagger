@@ -1,4 +1,4 @@
-package cron
+package external_api
 
 import (
 	"context"
@@ -18,16 +18,15 @@ type NasdaqFetcher struct {
 	client *http.Client
 }
 
-type nasdaqResponse struct {
-	Data struct {
-		Rows []nasdaqStock `json:"rows"`
-	} `json:"data"`
+type NasdaqStock struct {
+	Symbol string `json:"symbol"`
+	Name   string `json:"name"`
 }
 
-type nasdaqStock struct {
-	Symbol  string `json:"symbol"`
-	Name    string `json:"name"`
-	Country string `json:"country"`
+type nasdaqResponse struct {
+	Data struct {
+		Rows []NasdaqStock `json:"rows"`
+	} `json:"data"`
 }
 
 func NewNasdaqFetcher() *NasdaqFetcher {
@@ -36,7 +35,7 @@ func NewNasdaqFetcher() *NasdaqFetcher {
 	}
 }
 
-func (n *NasdaqFetcher) FetchStocks(ctx context.Context) ([]nasdaqStock, error) {
+func (n *NasdaqFetcher) FetchTickers(ctx context.Context) ([]NasdaqStock, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", nasdaqAPIURL, nil)
 	if err != nil {
 		return nil, err
@@ -51,7 +50,7 @@ func (n *NasdaqFetcher) FetchStocks(ctx context.Context) ([]nasdaqStock, error) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, fmt.Errorf("nasdaq API returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)

@@ -17,15 +17,15 @@ type Comment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-type StockSplit struct {
-	ID            int64     `json:"id"`
-	TickerID      int64     `json:"ticker_id"`
-	Ratio         string    `json:"ratio"`
-	EffectiveDate time.Time `json:"effective_date"`
-	CreatedAt     time.Time `json:"created_at"`
+type TickerMention struct {
+	ID          int64     `json:"id"`
+	TickerID    int64     `json:"ticker_id"`
+	UserID      int64     `json:"user_id"`
+	CommentID   int64     `json:"comment_id"`
+	MentionedAt time.Time `json:"mentioned_at"`
 }
 
-type Ticker struct {
+type TickerName struct {
 	ID          int64     `json:"id"`
 	Symbol      string    `json:"symbol"`
 	CompanyName string    `json:"company_name"`
@@ -34,21 +34,19 @@ type Ticker struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-type TickerMention struct {
-	ID          int64     `json:"id"`
-	TickerID    int64     `json:"ticker_id"`
-	UserID      int64     `json:"user_id"`
-	CommentID   int64     `json:"comment_id"`
-	PriceID     int64     `json:"price_id"`
-	MentionedAt time.Time `json:"mentioned_at"`
-}
-
 type TickerPrice struct {
 	ID         int64     `json:"id"`
 	TickerID   int64     `json:"ticker_id"`
 	Price      string    `json:"price"`
 	RecordedAt time.Time `json:"recorded_at"`
 	Volume     int64     `json:"volume"`
+}
+
+type TickerSplit struct {
+	ID            int64     `json:"id"`
+	TickerID      int64     `json:"ticker_id"`
+	Ratio         string    `json:"ratio"`
+	EffectiveDate time.Time `json:"effective_date"`
 }
 
 type User struct {

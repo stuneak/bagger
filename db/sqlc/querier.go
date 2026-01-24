@@ -11,23 +11,20 @@ import (
 
 type Querier interface {
 	CreateComment(ctx context.Context, arg CreateCommentParams) (Comment, error)
-	CreateTicker(ctx context.Context, arg CreateTickerParams) (Ticker, error)
+	CreateTicker(ctx context.Context, arg CreateTickerParams) (TickerName, error)
 	CreateTickerMention(ctx context.Context, arg CreateTickerMentionParams) (TickerMention, error)
 	CreateUser(ctx context.Context, username string) (User, error)
 	CreateVisitor(ctx context.Context, arg CreateVisitorParams) error
-	GetAllPicksWithPricesAndSplitsSince(ctx context.Context, mentionedAt time.Time) ([]GetAllPicksWithPricesAndSplitsSinceRow, error)
+	DeleteTickerPriceByDate(ctx context.Context, arg DeleteTickerPriceByDateParams) error
+	GetAllMentionsComplete(ctx context.Context, mentionedAt time.Time) ([]GetAllMentionsCompleteRow, error)
 	GetAllSplits(ctx context.Context) ([]GetAllSplitsRow, error)
 	GetAllVisitors(ctx context.Context, limit int32) ([]Visitor, error)
 	GetCommentByUserAndExternalID(ctx context.Context, arg GetCommentByUserAndExternalIDParams) (Comment, error)
-	GetFirstMentionPerTickerByUsername(ctx context.Context, username string) ([]GetFirstMentionPerTickerByUsernameRow, error)
-	GetHighestPriceAfterDate(ctx context.Context, arg GetHighestPriceAfterDateParams) (GetHighestPriceAfterDateRow, error)
-	GetLatestTickerPrice(ctx context.Context, tickerID int64) (GetLatestTickerPriceRow, error)
 	GetSplitsBetweenDates(ctx context.Context, arg GetSplitsBetweenDatesParams) ([]GetSplitsBetweenDatesRow, error)
-	GetSplitsByTicker(ctx context.Context, tickerID int64) ([]StockSplit, error)
-	GetTickerBySymbol(ctx context.Context, symbol string) (Ticker, error)
-	GetTickerPriceByDate(ctx context.Context, arg GetTickerPriceByDateParams) (GetTickerPriceByDateRow, error)
-	GetUniqueUserPicksWithLatestPricesSince(ctx context.Context, mentionedAt time.Time) ([]GetUniqueUserPicksWithLatestPricesSinceRow, error)
+	GetSplitsByTicker(ctx context.Context, tickerID int64) ([]TickerSplit, error)
+	GetTickerBySymbol(ctx context.Context, symbol string) (TickerName, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	GetUserMentionsComplete(ctx context.Context, arg GetUserMentionsCompleteParams) ([]GetUserMentionsCompleteRow, error)
 	GetVisitorCountAll(ctx context.Context) (int64, error)
 	GetVisitorCountLastDay(ctx context.Context) (int64, error)
 	GetVisitorCountLastMonth(ctx context.Context) (int64, error)
@@ -37,10 +34,9 @@ type Querier interface {
 	GetVisitorsLastDay(ctx context.Context) ([]Visitor, error)
 	GetVisitorsLastMonth(ctx context.Context) ([]Visitor, error)
 	GetVisitorsLastWeek(ctx context.Context) ([]Visitor, error)
-	InsertStockSplit(ctx context.Context, arg InsertStockSplitParams) error
 	InsertTickerPrice(ctx context.Context, arg InsertTickerPriceParams) (TickerPrice, error)
-	ListAllTickers(ctx context.Context) ([]Ticker, error)
-	TickerPriceExistsForDate(ctx context.Context, arg TickerPriceExistsForDateParams) (bool, error)
+	InsertTickerSplit(ctx context.Context, arg InsertTickerSplitParams) error
+	ListAllTickers(ctx context.Context) ([]TickerName, error)
 	UpsertTicker(ctx context.Context, arg UpsertTickerParams) error
 }
 

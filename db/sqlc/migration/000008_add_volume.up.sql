@@ -1,1 +1,0 @@
-ALTER TABLE ticker_prices ADD COLUMN volume BIGINT NOT NULL DEFAULT 0;
