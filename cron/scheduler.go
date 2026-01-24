@@ -339,23 +339,23 @@ func (s *Scheduler) RegisterJobs() error {
 	}
 
 	// 4. Reddit scraping - 3h cycle, staggered: #1 at +15m, #2 at +1h, #3 at +2h
-	// redditDelays := []time.Duration{15 * time.Minute, 1 * time.Hour, 2 * time.Hour}
-	// for i, subreddit := range subreddits {
-	// 	sub := subreddit
-	// 	subStart := now.Add(redditDelays[i])
+	redditDelays := []time.Duration{15 * time.Minute, 1 * time.Hour, 2 * time.Hour}
+	for i, subreddit := range subreddits {
+		sub := subreddit
+		subStart := now.Add(redditDelays[i])
 
-	// 	_, err := s.scheduler.NewJob(
-	// 		gocron.DurationJob(3*time.Hour),
-	// 		gocron.NewTask(func() { s.fetchSubreddit(sub) }),
-	// 		gocron.WithName("reddit-scrape-"+sub),
-	// 		gocron.WithStartAt(gocron.WithStartDateTime(subStart)),
-	// 	)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
+		_, err := s.scheduler.NewJob(
+			gocron.DurationJob(3*time.Hour),
+			gocron.NewTask(func() { s.fetchSubreddit(sub) }),
+			gocron.WithName("reddit-scrape-"+sub),
+			gocron.WithStartAt(gocron.WithStartDateTime(subStart)),
+		)
+		if err != nil {
+			return err
+		}
+	}
 
-	// clog("all %d jobs registered", 3+len(subreddits))
+	clog("all %d jobs registered", 3+len(subreddits))
 	return nil
 }
 
