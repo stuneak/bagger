@@ -218,8 +218,8 @@ func (server *Server) getPerformingPicks(ctx *gin.Context, topPerformers bool) {
 		})
 	}
 
-	if len(results) > 50 {
-		results = results[:50]
+	if len(results) > 10 {
+		results = results[:10]
 	}
 
 	ctx.JSON(http.StatusOK, results)
