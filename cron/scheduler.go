@@ -333,7 +333,7 @@ func (s *Scheduler) RegisterJobs() error {
 	// 3. Ticker splits - +5 min after startup, every 24h
 	splitsStart := now.Add(5 * time.Minute)
 	_, err = s.scheduler.NewJob(
-		gocron.DurationJob(24*time.Hour),
+		gocron.DurationJob(12*time.Hour),
 		gocron.NewTask(s.fetchTickerSplits),
 		gocron.WithName("ticker-splits"),
 		gocron.WithStartAt(gocron.WithStartDateTime(splitsStart)),

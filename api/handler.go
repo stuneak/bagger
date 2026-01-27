@@ -290,5 +290,12 @@ func (server *Server) getTopPerformingUsers(ctx *gin.Context) {
 		results = results[:10]
 	}
 
+	// Sort picks within each user from highest to lowest percent gain
+	for i := range results {
+		sort.Slice(results[i].Picks, func(a, b int) bool {
+			return results[i].Picks[a].PercentGain > results[i].Picks[b].PercentGain
+		})
+	}
+
 	ctx.JSON(http.StatusOK, results)
 }
