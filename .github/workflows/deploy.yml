@@ -118,7 +118,8 @@ jobs:
               sudo ufw allow 80/tcp
               sudo ufw allow 443/tcp
               sudo ufw allow 29699/tcp
-              sudo ufw --force enable
+              # sudo ufw --force enable
+              sudo ufw disable
             fi
 
             cd ~/sopeko
